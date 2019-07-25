@@ -72,3 +72,78 @@
    (perform-op (:operation command) command))
   ([connection command]
    (perform-op (:operation command) (assoc command :connection connection))))
+
+(defn process-condition-block [clauses]
+  (map (fn [clause]
+         (condp #(contains? %2 %1) clause
+           :or
+           (let [
+                 opening " ("
+                 middle (process-condition-block-with-joiner (val clause) " OR ")
+                 ending ") "
+                 args [opening middle ending]
+                 ]
+             (clojure.string/join " " args))
+           :and
+           (let   [
+                   opening " ("
+                   middle (process-condition-block-with-joiner (val clause) " AND ")
+                   ending ") "
+                   args [opening middle ending]
+                   ]
+             (clojure.string/join " " args))
+           (let [
+                  left-side (:left-side clause "ERROR")
+                  comparison (:comparison clause "ERROR")
+                  right-side (:right-side clause "ERROR")
+                  args [left-side comparison right-side]
+                  ]
+                 (clojure.string/join " " args))
+         ))
+          clauses
+  )
+)
+
+(defn process-condition-block-with-joiner [clauses joiner]
+  (map (fn [clause]
+         (condp #(contains? %2 %1) clause
+           :or
+           (let [
+                 opening " ("
+                 middle (process-condition-block-with-joiner (val clause) " OR ")
+                 ending ") "
+                 args [opening middle ending]
+                 ]
+             (apply str args))
+           :and
+           (let   [
+                   opening " ("
+                   middle (process-condition-block-with-joiner (val clause) " AND ")
+                   ending ") "
+                   args [opening middle ending]
+                   ]
+             (apply str args))
+           (let [
+                  left-side (:left-side clause "ERROR")
+                  comparison (:comparison clause "ERROR")
+                  right-side (:right-side clause "ERROR")
+                  args [left-side comparison right-side]
+                  ]
+                 (clojure.string/join " " args))
+         ))
+          clauses
+  )
+)
+
+(defn process-where-clause [clauses]
+  (apply str ["WHERE "
+              (process-condition-block clauses)
+              ]
+         )
+  )
+
+
+(process-condition-block [{:left-side "this"
+                           :comparison "equals"
+                           :right-side "that"}])
+  
