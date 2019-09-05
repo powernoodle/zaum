@@ -291,7 +291,85 @@
         args [command-text from-text mid-command1 field-text where-text]]
     (clojure.string/join " " args)))
 
-(defn validate-command [clauses]
+(defn process-field-list-create-table [clauses]
+  (let [things
+        (map (fn [clause]
+               (let [field-name  (:field-name clause)
+                     data-type (:data-type clause)
+                     data-size (:data-size clause)
+                     nullability (:nullability clause)
+                     default (:default clause)
+                     args [field-name
+                           " "
+                           data-type
+                           (if (or (= data-type :char)
+                                   (= data-type :varchar)
+                                   (= data-type :number))
+                             "("
+                             "")
+                           (if (or (= data-type :char)
+                                   (= data-type :varchar)
+                                   (= data-type :number))
+                             data-size
+                             "")
+                           (if (or (= data-type :char)
+                                   (= data-type :varchar)
+                                   (= data-type :number))
+                             ")"
+                             "")
+                           " "
+                           (if (= nullability :not-null)
+                             "NOT NULL"
+                             "NULL")
+                           " "
+                           (if (some? default)
+                             "DEFAULT "
+                             "")
+                           (if (some? default)
+                             default
+                             "")]]
+                 (clojure.string/join "" args))) clauses)]
+    (clojure.string/join ", " things)))
+
+(defn process-create-command [clauses]
+  (let [target-type (:target-type clauses)
+        into (:into clauses)
+        field-list (:field-list clauses)
+        sub-select (:insert-select clauses)]
+    (cond = target-type
+          :table
+          (let [command-text "CREATE TABLE"
+                table-name (:table-name into)
+                mid-command1 "("
+                field-text (process-field-list-create-table field-list)
+                mid-command2 ")"
+                args [command-text table-name mid-command1 field-text mid-command2]]
+            (clojure.string/join " " args))
+          :view
+          (let [command-text "CREATE VIEW"
+                view-name (:table-name into)
+                mid-command1 "AS"
+                select-text (process-select-command sub-select)
+                args [command-text view-name mid-command1 select-text]]
+            (clojure.string/join " " args))
+          :else
+          "UNKNOWN TARGET-TYPE"
+          )))
+
+(defn process-drop-command [clauses]
+  (let [target-type (:target-type clauses)
+        into (:into clauses)
+        command (cond = target-type
+                      :table
+                      "DROP TABLE"
+                      :view
+                      "DROP VIEW"
+                      :else
+                      "UNKNOWN TARGET-TYPE")
+        args [command into]]
+    (clojure.string/join " " args)))
+
+(defn new-val [clauses]
   (let [in-operation (:operation clauses :select)
         operation (condp = in-operation
                     :read :select
@@ -324,65 +402,199 @@
         having (:having clauses nil)
         group-by-list (:group-by clauses nil)
         order-by-list (:order-by clauses nil)]
-    (reduce
-     (fn [validation-errors]
-       (condp = operation
-         :select
-         (let [suberrors []]
-           (when (some? field-list) (let [subcommand (validate-command {:operation :select-field-clause
-                                                                        :field-clause field-list})]
-                                      (if (not (empty? subcommand))
-                                        (conj suberrors subcommand))))
-           (when (some? from) (let [subcommand (validate-command {:operation :select-field-clause
-                                                                  :field-clause field-list})]
-                                (if (not (empty? subcommand))
-                                  (conj suberrors subcommand))))
-           (when (some? where) (let [subcommand (validate-command {:operation :select-field-clause
-                                                                   :field-clause field-list})]
-                                 (if (not (empty? subcommand))
-                                   (conj suberrors subcommand))))
-           (when (some? having) (let [subcommand (validate-command {:operation :select-field-clause
-                                                                    :field-clause field-list})]
-                                  (if (not (empty? subcommand))
-                                    (conj suberrors subcommand))))
-           (when (some? group-by-list) (let [subcommand (validate-command {:operation :select-field-clause
-                                                                           :field-clause field-list})]
-                                         (if (not (empty? subcommand))
-                                           (conj suberrors subcommand))))
-           (when (some? order-by-list) (let [subcommand (validate-command {:operation :select-field-clause
-                                                                           :field-clause field-list})]
-                                         (if (not (empty? subcommand))
-                                           (conj suberrors subcommand))))
-           )
-         :select-field-clause
-         (fn [] ((when (not (vector? field-list))
-                   (print "SELECT field clause must be a vector: ")
-                   (clojure.pprint/pprint field-list))
-                 (map (fn [clause]
-                        (let [field-name (:field-name clause)
-                              field-alias (:field-alias clause)
-                              table-alias (:table-alias clause)]
-                          (when (some? field-alias) (when (not (string? field-alias))
-                                                      (print "SELECT field alias must be a string: ")
-                                                      (clojure.pprint/pprint clause)))
-                          (when (some? table-alias) (when (not (string? table-alias))
-                                                      (print "SELECT table alias must be a string: ")
-                                                      (clojure.pprint/pprint clause)))
-                          (if (some? field-name)
-                            (when (not (string? field-name))
-                              (print "SELECT field name must be a string: ")
-                              (clojure.pprint/pprint clause))
-                            (fn [] ((print "SELECT :field-name must exist")
-                                    (clojure.pprint/pprint clause)))))))))
-         :insert
-         (fn [] ((when (some? into) (validate-command {:operation :to-clause
-                                                             :into into}))
-                 (when (some? field-list) (validate-command {:operation :field-clause
-                                                             :field-list field-list}))))
-         ))
-     [])))
+    (conj []
+          (condp = operation
+            :select
+            (conj []
+                  {:type :info :message ":select being validated" :source clauses}
+                  (if (not (vector? field-list))
+                    {:type :error :message ":field-list must be a vector" :source clauses}
+                    (new-val {:operation :select-field-clause :field-list field-list}))
+                  (if (not (vector? from))
+                    {:type :error :message ":from must be a vector" :source clauses}
+                    (new-val {:operation :select-from-clause :from from})))
+            :select-field-clause
+            (conj []
+                  {:type :info :message ":field-list inside :select being validated" :source clauses}
+                  (map (fn [clause]
+                         (let [table-alias (:table-alias clause)
+                               field-alias (:field-alias clause)
+                               field-name (:field-name clause)]
+                           (conj []
+                                 (if (some? table-alias)
+                                   (if (not (string? table-alias))
+                                     {:type :error :message ":table-alias must be a string" :source clause}
+                                     {:type :info :message ":table-alias okay" :source clause})
+                                   {:type :info :message ":table-alias not specified (optional)" :source clause})
+                                 (if (some? field-alias)
+                                   (if (not (string? field-alias))
+                                     {:type :error :message ":field-alias must be a string" :source clause}
+                                     {:type :info :message ":field-alias okay" :source clause})
+                                   {:type :info :message ":field-alias not specified (optional)" :source clause})
+                                 (if (not (some? field-name))
+                                   {:type :error :message ":field-name must be present" :source clause}
+                                   (if (not (string? field-name))
+                                     {:type :error :message ":field-name must be a string" :source clause}
+                                     {:type :info :message ":field-name okay" :source clause}))))
+                         ) (:field-list clauses)))
+            :select-from-clause
+            (conj []
+                  {:type :info :message ":from inside :select being validated" :source clauses}
+                  (map (fn [clause]
+                         (let [sub-select (:sub-select clause)
+                               table-name (:table-name clause)
+                               table-alias (:table-alias clause)
+                               join-clause (:join-clause clause)
+                               join-type (:join-type clause)]
+                           (conj []
+                                 (if (not (some? table-alias))
+                                   {:type :info :message ":table-alias not specified (optional)" :source clause}
+                                   (if (not (string? table-alias))
+                                     {:type :error :message ":table-alias must be a string" :source clause}
+                                     {:type :info :message ":table-alias okay" :source clause}))
+                                 (if (not (or (some? table-name) (some? sub-select)))
+                                   {:type :error :message ":table-name or :sub-select must be present" :source clause}
+                                   (if (some? table-name)
+                                     (if (not (string? table-name))
+                                       {:type :error :message ":table-name must be a string" :source clause}
+                                       {:type :info :message ":table-name okay" :source clause})
+                                     (new-val (assoc sub-select :operation :select))))
+                                 (if (not (some? join-type))
+                                   {:type :info :message "join info not specified" :source clause}
+                                   (if (or (= join-type :inner-join)
+                                           (= join-type :left-outer-join)
+                                           (= join-type :right-outer-join)
+                                           (= join-type :full-outer-join)
+                                           (= join-type :cross-join)
+                                           (= join-type :unnames-join))
+                                     {:type :info :message "join type valid" :source clause}
+                                     {:type :error :message "join type invalid" :source clause}))
+                                 (if (not (some? join-clause))
+                                   {:type :info :message "join clause not specified (optional)" :source clause}
+                                   (new-val (assoc join-clause :operation :condition-block)))))
+                         ) (:from clauses)))
+            :condition-block
+            (conj []
+                  (map (fn [clause]
+                         (let [or (:or clause)
+                               and (:and clause)
+                               left (:left clause)
+                               comparison (:comparison clause)
+                               right (:right clause)]
+                           (conj []
+                                 (if (some? or)
+                                   (new-val (assoc or :operation :condition-block))
+                                   (if (some? and)
+                                     (new-val (assoc and :operation :condition-block))
+                                     (conj []
+                                           (if (not (some? left))
+                                             {:type :error :message ":left must be specified" :source clause}
+                                             (if (not (string? left))
+                                               {:type :error :message ":left must be a string" :source clause}
+                                               {:type :info :message ":left okay" :source clause}))
+                                           (if (not (some? comparison))
+                                             {:type :error :message ":comparison must be specified" :source clause}
+                                             (if (not (string? comparison))
+                                               {:type :error :message ":comparison must be a string" :source clause}
+                                               {:type :info :message ":comparison okay" :source clause}))
+                                           (if (not (some? right))
+                                             {:type :error :message ":right must be specified" :source clause}
+                                             (if (not (string? right))
+                                               {:type :error :message ":right must be a string" :source clause}
+                                               {:type :info :message ":right okay" :source clause})))))))
+                         ) clauses))
+            :else
+            (conj []
+                  {:type :error :message "unknown operation" :source clauses})))))
 
-(defn process-command [clauses]
+
+
+#_(defn validate-command [clauses]
+  (clojure.pprint/pprint clauses)
+  (let [validation-errors []
+        in-operation (:operation clauses :select)
+        operation (condp = in-operation
+                    :read :select
+                    :write :insert
+                    :write-from-read :insert-from-select
+                    :change-simple :update-simple
+                    :change-multi :update-multi
+                    :write-change :merge
+                    in-operation
+                    )
+        fault-tolerance (:fault-tolerance clauses :strict)
+        target-type (:target-type clauses :table)
+        simulate (:simulate clauses :true)
+        return-type (:return-type clauses :all-rows-as-map)
+        field-list (:field-list clauses nil)
+        from (cond
+               (contains? clauses :from) (:from clauses)
+               (contains? clauses :source) (:source clauses)
+               :else nil)
+        into (cond
+               (contains? clauses :into) (:into clauses)
+               (contains? clauses :destination) (:destination clauses)
+               :else nil)
+        insert-select (:insert-select clauses nil)
+        where (cond
+                (contains? clauses :where) (:where clauses)
+                (contains? clauses :conditions) (:conditions clauses)
+                (contains? clauses :selector) (:selector clauses)
+                :else nil)
+        having (:having clauses nil)
+        group-by-list (:group-by clauses nil)
+        order-by-list (:order-by clauses nil)]
+    ;(reduce
+     ;(fn [validation-errors]
+    (clojure.pprint/pprint field-list)
+    (let [suberrors []
+          val-errors (condp = operation
+         :select
+         (do
+           (clojure.pprint/pprint "Got here")
+           (if (not (vector? field-list))
+             (do
+               (clojure.pprint/pprint validation-errors)
+               (conj validation-errors {:type :error :message "Field list must be a vector" :source field-list})
+               #_(clojure.pprint/pprint "I even set validation-errors")
+               #_(clojure.pprint/pprint validation-errors))
+             (let [subcommand (validate-command {:operation :select-field-clause :field-clause field-list})]
+               (when (not (empty? subcommand)) (conj validation-errors subcommand))))
+           (if (not (vector? from))
+             (conj validation-errors {:type :error :message "From clause must be a vector" :source from})
+             (let [subcommand (validate-command {:operation :select-from-clause :from from})]
+               (when (not (empty? subcommand)) (conj validation-errors subcommand))))
+           (when (some? where)
+             (if (not (vector? where))
+               (conj suberrors {:type :error :message "Where clause must be a vector" :source where})
+               (let [subcommand (validate-command {:operation :select-where-clause :where where})]
+                 (when (not (empty? subcommand)) (conj suberrors subcommand)))))
+           (when (some? having)
+             (if (not (vector? having))
+               (conj suberrors {:type :error :message "Having clause must be a vector" :source having})
+               (let [subcommand (validate-command {:operation :select-having-clause :having having})]
+                 (when (not (empty? subcommand)) (conj suberrors subcommand)))))
+           (when (some? group-by-list)
+             (if (not (vector? group-by-list))
+               (conj suberrors {:type :error :message "Group by clause must be a vector" :source group-by-list})
+               (let [subcommand (validate-command {:operation :select-group-by-clause :group-by group-by-list})]
+                 (when (not (empty? subcommand)) (conj suberrors subcommand)))))
+           (when (some? order-by-list)
+             (if (not (vector? order-by-list))
+               (conj suberrors {:type :error :message "Order by clause must be a vector" :source order-by-list})
+               (let [subcommand (validate-command {:operation :select-order-by-clause :order-by order-by-list})]
+                 (when (not (empty? subcommand)) (conj suberrors subcommand)))))
+           ;;(conj validation-errors suberrors)
+           )
+         )]
+       (clojure.pprint/pprint val-errors))
+       ;)
+     ;[])
+    ))
+
+#_(validate-command {:operation :select })
+
+#_(defn process-command [clauses]
   (let [in-operation (:operation clauses :select)
         operation (condp = in-operation
                     :read :select
@@ -480,7 +692,7 @@
      :status-return-code "PUT STATUS RETURN CODE HERE"
      }))
 
-(process-command {:operation :update-simple
+#_(process-command {:operation :update-simple
                   :field-list [{:field-name "field1" :set-to "blah"}]
                   :into [{:table-name "table1"}]})
 
@@ -537,3 +749,109 @@
                          {:field-name "field3" :field-alias "field3" :table-alias "t1"}]
                         [{:table-name "table2" :table-alias "t1"}]
                         [{:left "t1.field4" :comparison "=" :right "'Manager'"}])
+
+(def rx-word-boundary "\\b")
+(def rx-any-character ".")
+(def rx-zero-or-one "?")
+(def rx-zero-or-many "*")
+(def rx-one-or-many "+")
+(def rx-digit-character "\\d")
+(def rx-not-digit-character "\\D")
+(def rx-word-character "\\w")
+(def rx-not-word-character "\\W")
+(def rx-whitespace-character "\\s")
+(def rx-not-whitespace-character "\\S")
+(def rx-string-beginning "^")
+(def rx-string-ending "$")
+(def rx-line-feed-character "\\n")
+(def rx-carriage-return-character "\\r")
+(def rx-tab-character "\\t")
+(def rx-lazy-character "?")
+(def rx-group-open "(")
+(def rx-group-close ")")
+(def rx-curly-open "{")
+(def rx-curly-close "}")
+(def rx-square-open "[")
+(def rx-square-close "]")
+
+(defn rx-exactly-n-of [n thing]
+  (let [args [thing rx-curly-open n rx-curly-close]]
+    (clojure.string/join "" args)))
+
+(defn rx-between-n-and-m-of [n m thing]
+  (let [args [thing rx-curly-open n "," m rx-curly-close]]
+    (clojure.string/join "" args)))
+
+(defn rx-at-least-n-of [n thing]
+  (let [args [thing rx-curly-open n "," rx-curly-close]]
+    (clojure.string/join "" args)))
+
+(defn rx-zero-to-n-of [n thing]
+  (let [args [thing rx-curly-open "," n rx-curly-close]]
+    (clojure.string/join "" args)))
+
+(defn rx-zero-to-one-of [thing]
+  (let [args [thing rx-zero-or-one]]
+    (clojure.string/join "" args)))
+
+(defn rx-zero-to-many-of [thing]
+  (let [args [thing rx-zero-or-many]]
+    (clojure.string/join "" args)))
+
+(defn rx-one-to-many-of [thing]
+  (let [args [thing rx-one-or-many]]
+    (clojure.string/join "" args)))
+
+(defn rx-lazy [thing]
+  (let [args [thing rx-lazy-character]]
+    (clojure.string/join "" args)))
+
+(defn rx-lazy-exactly-n-of [n thing]
+  (rx-lazy (rx-exactly-n-of n thing)))
+
+(defn rx-lazy-between-n-and-m-of [n m thing]
+  (rx-lazy (rx-between-n-and-m-of n m thing)))
+
+(defn rx-lazy-at-least-n-of [n thing]
+  (rx-lazy (rx-at-least-n-of n thing)))
+
+(defn rx-lazy-zero-to-n-of [n thing]
+  (rx-lazy (rx-zero-to-n-of n thing)))
+
+(defn rx-lazy-zero-to-one-of [thing]
+  (rx-lazy (rx-zero-to-one-of thing)))
+
+(defn rx-lazy-zero-to-many-of [thing]
+  (rx-lazy (rx-zero-to-many-of thing)))
+
+(defn rx-lazy-one-to-many-of [thing]
+  (rx-lazy (rx-one-to-many-of thing)))
+
+(defn rx-combine [things]
+  (clojure.string/join "" things))
+
+(defn rx-capture-group [things]
+  (let [args [rx-group-open things rx-group-close]]
+    (clojure.string/join "" args)))
+
+(defn rx-non-capture-group [things]
+  (let [args [rx-group-open "?:" things rx-group-close]]
+    (clojure.string/join "" args)))
+
+(defn rx-these-characters [things]
+  (clojure.string/replace things "([[\\^$.|?*+(){}\\]])" (str (cat ["\\" "(\\1)"]))))
+
+(defn rx-one-of-these [options]
+  (let [options-text (clojure.string/join "|" options)
+        args [rx-group-open options-text rx-group-open]]
+    (clojure.string/join "" args)))
+
+(defn rx-character-set [characters]
+  (let [args [rx-square-open characters rx-square-close]]
+    (clojure.string/join "" args)))
+
+(defn rx-anti-character-set [characters]
+  (let [args [rx-square-open characters rx-square-close]]
+    (clojure.string/join "" args)))
+
+
