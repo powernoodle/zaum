@@ -369,6 +369,15 @@
         args [command into]]
     (clojure.string/join " " args)))
 
+(defn process-transaction-start-command [clauses]
+  "BEGIN TRANSACTION")
+
+(defn process-transaction-commit-command [clauses]
+  "COMMIT TRANSACTION")
+
+(defn process-transaction-rollback-command [clauses]
+  "ROLLBACK TRANSACTION")
+
 (defn new-val [clauses]
   (let [in-operation (:operation clauses :select)
         operation (condp = in-operation
