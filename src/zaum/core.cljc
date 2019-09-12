@@ -343,11 +343,7 @@
                 mid-command1 "("
                 field-text (process-field-list-create-table field-list)
                 mid-command2 ")"
-                args [command-text table-name mid-command1 field-text mid-command2]]
-            (clojure.string/join " " args))
-          :view
-          (let [command-text "CREATE VIEW"
-                view-name (:table-name into)
+                
                 mid-command1 "AS"
                 select-text (process-select-command sub-select)
                 args [command-text view-name mid-command1 select-text]]
@@ -603,7 +599,7 @@
 
 #_(validate-command {:operation :select })
 
-#_(defn process-command [clauses]
+(defn process-command [clauses]
   (let [in-operation (:operation clauses :select)
         operation (condp = in-operation
                     :read :select
@@ -658,6 +654,20 @@
                       :delete
                       (process-delete-command {:from-clause from
                                                :where-clause where})
+                      :drop
+                      (process-drop-command {:target-type target-type
+                                             :into into})
+                      :create
+                      (process-create-command {:target-type target-type
+                                               :into into
+                                               :field-list field-list
+                                               :insert-select insert-select})
+                      :transaction-start
+                      (process-transaction-start-command nil)
+                      :transaction-commit
+                      (process-transaction-commit-command nil)
+                      :transaction-rollback
+                      (process-transaction-rollback-command nil)
                       "NOT YET IMPLEMENTED")
         simulate-sql (condp = operation
                       :select
