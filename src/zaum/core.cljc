@@ -75,6 +75,46 @@
 
 (declare process-sub-select)
 
+(declare process-select-command)
+
+(defn process-left-right-inner [clause]
+  (let [table-alias (:table-alias clause "")
+        joiner (if (contains? clause :table-alias) "." "")
+        field-name (:field-name clause "")
+        value (:value clause "")
+        args [table-alias joiner field-name value]]
+    (clojure.string/join "" args)))
+
+(defn process-left-or-right [clause]
+  (if (map? clause)
+    (cond
+      (contains? clause :sub-select)
+      (process-sub-select (:sub-select clause))
+      (and (contains? clause :quoted) (= (:quoted clause) true))
+      (let [opener "'"
+            middle (process-left-right-inner clause)
+            closer "'"
+            args [opener middle closer]]
+        (clojure.string/join "" args))
+      (and (contains? clause :quoted) (= (:quoted clause) false))
+      (let [middle (process-left-right-inner clause)
+            args [middle]]
+        (clojure.string/join "" args))
+      (and (contains? clause :data-type) (or (= (:data-type clause) :text)
+                                             (= (:data-type clause) :date)
+                                             (= (:data-type clause) :timestamp)))
+      (let [opener "'"
+            middle (process-left-right-inner clause)
+            closer "'"
+            args [opener middle closer]]
+        (clojure.string/join "" args))
+      :else
+      (let [middle (process-left-right-inner clause)
+            args [middle]]
+        (clojure.string/join "" args))
+      )
+    clause))
+
 (defn process-condition-block [clauses & {:keys [stringify?] :or {stringify? true}}]
   ;;(clojure.pprint/pprint clauses)
   (let [things
@@ -92,9 +132,9 @@
 
              )
            (let [
-                  left (process-sub-select (:left clause "ERROR"))
+                  left (process-left-or-right (:left clause "ERROR"))
                   comparison (:comparison clause "ERROR")
-                  right (process-sub-select (:right clause "ERROR"))
+                  right (process-left-or-right (:right clause "ERROR"))
                   args [left comparison right]
                   ]
                  (clojure.string/join " " args))
@@ -201,7 +241,7 @@
 (defn process-field-list-insert-values [clauses]
   (let [things
         (map (fn [clause]
-               (let [set-to  (:set-to clause)
+               (let [set-to  (process-left-or-right (:set-to clause))
                      args [set-to]]
                  (clojure.string/join "" args))) clauses)]
     (clojure.string/join ", " things)))
@@ -210,7 +250,7 @@
   (let [things
         (map (fn [clause]
                (let [field-name  (:field-name clause)
-                     set-to (:set-to clause)
+                     set-to (process-left-or-right (:set-to clause))
                      args [field-name " = " set-to]]
                  (clojure.string/join "" args))) clauses)]
     (clojure.string/join ", " things)))
@@ -343,7 +383,11 @@
                 mid-command1 "("
                 field-text (process-field-list-create-table field-list)
                 mid-command2 ")"
-                
+                args [command-text table-name mid-command1 field-text mid-command2]]
+            (clojure.string/join " " args))
+          :view
+          (let [command-text "CREATE VIEW"
+                view-name (:table-name into)
                 mid-command1 "AS"
                 select-text (process-select-command sub-select)
                 args [command-text view-name mid-command1 select-text]]
@@ -873,4 +917,6 @@
   (let [args [rx-square-open characters rx-square-close]]
     (clojure.string/join "" args)))
 
-
+(new-val {:operation :select
+          :field-list [{:field-name "field1"}]
+          :from [{:table-name "table1"}]})
