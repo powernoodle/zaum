@@ -82,7 +82,7 @@
   (let [table-alias (:table-alias clause "")
         joiner (if (contains? clause :table-alias) "." "")
         field-name (:field-name clause "")
-        value (:value clause "")
+        value (:value clause clause)
         args [table-alias joiner field-name value]]
     (clojure.string/join "" args)))
 
