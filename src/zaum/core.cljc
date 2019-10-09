@@ -776,14 +776,14 @@
     (jdbc/get-connection ds)))
 
 
-{:operation :write,
+#_{:operation :write,
  :connection conn
  :replacement-values ["Nick"]
  :into [{:table-name "bob_dummy"}],
  :field-list
  [{:field-name "name", :set-to "?"}]}
 
-{:operation :write,
+#_{:operation :write,
  :connection conn,
  :to :contacts__contacts,
  :field-list
