@@ -1,4 +1,5 @@
-(ns zaum.core)
+(ns zaum.core
+  (:require [next.jdbc :as jdbc]))
 
 (defmulti prepare-connection :dbtype)
 
@@ -241,7 +242,11 @@
 (defn process-field-list-insert-values [clauses]
   (let [things
         (map (fn [clause]
-               (let [set-to  (process-left-or-right (:set-to clause))
+               (let [set-to  (if (or
+                                  (nil? (:set-to clause))
+                                  (= (:set-to clause) ""))
+                               "NULL"
+                               (process-left-or-right (:set-to clause)))
                      args [set-to]]
                  (clojure.string/join "" args))) clauses)]
     (clojure.string/join ", " things)))
@@ -250,7 +255,11 @@
   (let [things
         (map (fn [clause]
                (let [field-name  (:field-name clause)
-                     set-to (process-left-or-right (:set-to clause))
+                     set-to (if (or
+                                 (nil? (:set-to clause))
+                                 (= (:set-to clause) ""))
+                              "NULL"
+                              (process-left-or-right (:set-to clause)))
                      args [field-name " = " set-to]]
                  (clojure.string/join "" args))) clauses)]
     (clojure.string/join ", " things)))
@@ -654,6 +663,7 @@
                     :write-change :merge
                     in-operation
                     )
+        connection (:connection clauses)
         fault-tolerance (:fault-tolerance clauses :strict)
         target-type (:target-type clauses :table)
         simulate (:simulate clauses :true)
@@ -738,8 +748,13 @@
                       (process-select-command {:from-clause from
                                                :field-clause [{:field-name "count(0)"}]
                                                :where-clause where})
-                      "NOT YET IMPLEMENTED")]
-    {:count "PUT COUNT HERE"
+                      "NOT YET IMPLEMENTED")
+        replacement-values (:replacement-values clauses nil)
+        run-result (if (some? replacement-values)
+                     (let [run-me-please (vec (concat (vector actual-sql) replacement-values))]
+                       (jdbc/execute! connection run-me-please))
+                     (jdbc/execute! connection [actual-sql]))]
+    {:count (if (contains? run-result :update-count) (:update-count run-result) 1)
      :command clauses
      :db-command actual-sql
      :simulate-db-command simulate-sql
@@ -747,13 +762,57 @@
                   :total-duration "PUT TOTAL TIME PROCESSING COMMAND HERE"
                   :start-time "PUT START TIME OF COMMAND HERE"
                   :end-time "PUT END TIME OF COMMAND HERE"}
-     :result-set "PUT RESULT SET HERE"
+     :result-set run-result
      :result-headers "PUT HEADERS FROM RESULT SET HERE"
      :status "PUT :error :ok OR :warning HERE"
      :status-source "PUT :db OR :internal HERE"
      :status-message "PUT STATUS MESSAGE HERE"
      :status-return-code "PUT STATUS RETURN CODE HERE"
      }))
+
+(defn get-connection [connection-info]
+  (let [dbspec (:connection-info connection-info)
+        ds (jdbc/get-datasource dbspec)]
+    (jdbc/get-connection ds)))
+
+
+{:operation :write,
+ :connection conn
+ :replacement-values ["Nick"]
+ :into [{:table-name "bob_dummy"}],
+ :field-list
+ [{:field-name "name", :set-to "?"}]}
+
+{:operation :write,
+ :connection conn,
+ :to :contacts__contacts,
+ :field-list
+ [{:field-name "user_id", :set-to "?"}
+  {:field-name "email", :set-to "?"}
+  {:field-name "first_name", :set-to "?"}
+  {:field-name "last_name", :set-to "?"}
+  {:field-name "industry", :set-to "?"}
+  {:field-name "status", :set-to "?"}
+  {:field-name "company", :set-to "?"}]
+ :replacement-values [8952 "giddyup@powernoodle.com" "" "" "" 1 ""]}
+
+#_(process-command {:operation :write,
+                  :connection conn
+                  :into [{:table-name "bob_dummy"}],
+                  :field-list
+                  [{:field-name "name", :set-to "?"}]
+                  :replacement-values ["Nick"]})
+
+#_(def dbspec {:dbtype "mysql"
+             :dbname "pn_old_mysql?zeroDateTimeBehavior=convertToNull&useUnicode=true&characterEncoding=UTF-8"
+             :host "pnoldsql"
+             :port "3306"
+             :user "dev"
+             :password "y!MY6{xO"})
+
+#_(def ds (next.jdbc/get-datasource dbspec))
+
+#_(next.jdbc/execute! ds "insert into bob_dummy (name) values ('Kyle')")
 
 #_(process-command {:operation :update-simple
                   :field-list [{:field-name "field1" :set-to "blah"}]
@@ -917,6 +976,4 @@
   (let [args [rx-square-open characters rx-square-close]]
     (clojure.string/join "" args)))
 
-(new-val {:operation :select
-          :field-list [{:field-name "field1"}]
-          :from [{:table-name "table1"}]})
+
