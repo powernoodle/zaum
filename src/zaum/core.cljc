@@ -78,11 +78,25 @@
 
 (declare process-select-command)
 
+(defn process-union-all [clauses]
+  (let [things (map (fn [clause]
+                      (process-sub-select clause)) clauses)
+        wholething (clojure.string/join " UNION ALL " things)
+        args ["(" wholething ")"]]
+    (clojure.string/join "" args)))
+
+(defn process-union [clauses]
+  (let [things (map (fn [clause]
+                      (process-sub-select clause)) clauses)
+        wholething (clojure.string/join " UNION " things)
+        args ["(" wholething ")"]]
+    (clojure.string/join "" args)))
+
 (defn process-left-right-inner [clause]
   (let [table-alias (:table-alias clause "")
         joiner (if (contains? clause :table-alias) "." "")
         field-name (:field-name clause "")
-        value (:value clause clause)
+        value (:value clause)
         args [table-alias joiner field-name value]]
     (clojure.string/join "" args)))
 
@@ -165,6 +179,13 @@
                        (let [table-name (:table-name clause)
                              table-alias (:table-alias clause)
                              sub-select (:sub-select clause)
+                             sub-select-text (process-select-command sub-select)
+                             union (cond
+                                     (contains? clause :union)
+                                     (process-union (:union clause))
+                                     (contains? clause :union-all)
+                                     (process-union-all (:union-all clause))
+                                     :else nil)
                              join-clause (:join-clause clause)
                              join-clause-text (process-condition-block join-clause)
                              join-type (:join-type clause)
@@ -181,19 +202,28 @@
                                               "CROSS JOIN"
                                               :unnamed-join
                                               ", "
+                                              :union
+                                              "UNION"
+                                              :union-all
+                                              "UNION ALL"
                                               )
                              args [join-type-text
-                                   (if (contains? clause :sub-select) sub-select table-name)
+                                   (if (contains? clause :sub-select) (process-sub-select (:sub-select clause)) table-name)
                                    (if (contains? clause :table-alias) table-alias)
-                                   "ON"
+                                   (if (or (= join-type :unnamed-join)
+                                           (= join-type :union)
+                                           (= join-type :union-all))
+                                     ""
+                                     "ON") 
                                    join-clause-text]
                              ]
                              (clojure.string/join " " args)
                              )
                        (let [sub-select (:sub-select clause)
+                             sub-select-text (process-select-command sub-select)
                              table-name (:table-name clause)
                              table-alias (:table-alias clause)
-                             args [(if (contains? clause :sub-select) sub-select table-name) table-alias]]
+                             args [(if (contains? clause :sub-select) (process-sub-select (:sub-select clause)) table-name) table-alias]]
                          (clojure.string/join " " args))
                      )) clauses);;]
   ;;)
@@ -266,7 +296,7 @@
 
 (defn process-sub-select [clause]
   #_(clojure.pprint/pprint clause)
-  (if (map? clause) (clojure.string/join "" ["(" (process-select-command (:sub-select clause)) ")"]) (str clause)))
+  (if (map? clause) (clojure.string/join "" ["(" (process-select-command clause) ")"]) (str clause)))
 
 (defn process-group-by-clause [clauses]
   (if (some? clauses) (apply str ["GROUP BY " (process-field-list-insert-dest clauses)]) ""))
@@ -276,13 +306,35 @@
 
 (defn process-select-command [clauses]
   #_(clojure.pprint/pprint clauses)
-  (let [field-clause (:field-clause clauses)
-        from-clause (:from-clause clauses)
-        where-clause (:where-clause clauses nil)
-        having-clause (:having-clause clauses nil)
-        group-by-clause (:group-by-clause clauses nil)
-        order-by-clause (:order-by-clause clauses nil)
-        command-text "SELECT"
+  (let [distinct (:distinct clauses false)
+        field-clause (cond
+                       (contains? clauses :field-clause) (:field-clause clauses)
+                       (contains? clauses :field-list) (:field-list clauses)
+                       :else nil)
+        from-clause (cond
+                      (contains? clauses :from-clause) (:from-clause clauses)
+                      (contains? clauses :from) (:from clauses)
+                      (contains? clauses :source) (:source clauses)
+                      :else nil)
+        where-clause (cond
+                       (contains? clauses :where-clause) (:where-clause clauses)
+                       (contains? clauses :where) (:where clauses)
+                       (contains? clauses :conditions) (:conditions clauses)
+                       (contains? clauses :selector) (:selector clauses)
+                       :else nil)
+        having-clause (cond
+                        (contains? clauses :having-clause) (:having-clause clauses)
+                        (contains? clauses :having) (:having clauses)
+                        :else nil)
+        group-by-clause (cond
+                          (contains? clauses :group-by-clause) (:group-by-clause clauses)
+                          (contains? clauses :group-by) (:group-by clauses)
+                          :else nil)
+        order-by-clause (cond
+                          (contains? clauses :order-by-clause) (:order-by-clause clauses)
+                          (contains? clauses :order-by) (:order-by clauses)
+                          :else nil)
+        command-text (if (= distinct true) "SELECT DISTINCT" "SELECT")
         field-text (process-field-list-select field-clause)
         mid-command1 "FROM"
         from-text (process-from-clause from-clause)
@@ -663,6 +715,7 @@
                     :write-change :merge
                     in-operation
                     )
+        distinct (:distinct clauses false)
         connection (:connection clauses)
         fault-tolerance (:fault-tolerance clauses :strict)
         target-type (:target-type clauses :table)
@@ -688,7 +741,8 @@
         order-by-list (:order-by clauses nil)
         actual-sql (condp = operation
                       :select
-                      (process-select-command {:field-clause field-list
+                      (process-select-command {:distinct distinct
+                                               :field-clause field-list
                                                :from-clause from
                                                :where-clause where
                                                :having-clause having
@@ -750,7 +804,7 @@
                                                :where-clause where})
                       "NOT YET IMPLEMENTED")
         replacement-values (:replacement-values clauses nil)
-        run-result (if (some? replacement-values)
+        run-result {:blah "NA"} #_(if (some? replacement-values)
                      (let [run-me-please (vec (concat (vector actual-sql) replacement-values))]
                        (jdbc/execute! connection run-me-please))
                      (jdbc/execute! connection [actual-sql]))]
@@ -774,6 +828,143 @@
   (let [dbspec (:connection-info connection-info)
         ds (jdbc/get-datasource dbspec)]
     (jdbc/get-connection ds)))
+
+#_(process-command
+ {:operation :select
+  :field-list [{:field-name "*"}]
+  :from [:union {
+   {:field-list
+     [{:field-name "count(action)", :field-alias "count"}
+      {:field-name "action"}
+      {:field-name "activity_id"}
+      {:field-name "1", :field-alias "registered"}],
+     :from
+     [{:sub-select
+       {:distinct true,
+        :field-list
+        [{:field-name "context_user-id"}
+         {:field-name "action"}
+         {:field-name "activity_id"}],
+        :from [{:table-name "participation_log"}],
+        :where
+        [{:and
+          [{:left "space_id", :comparison "=", :right "?"}
+           {:left "status", :comparison "=", :right "1"}
+           {:left "context_user_id", :comparison ">", :right "0"}
+           {:left "action",
+            :comparison "in",
+            :right
+            {:sub-select
+             {:field-list [{:field-name "id"}],
+              :from [{:table-name "participation_log_type"}],
+              :where
+              [{:left "action",
+                :comparison "in",
+                :right
+                "('action-tag-rendered','action-combine-rendered','action-vote-rendered','action-rate-rendered','action-prioritise-rendered','action-actions-rendered')"}]}}}]}]}}],
+    :group-by [{:field-name "action"} {:field-name "activity_id"}]}
+   {:field-list
+     [{:field-name "count(action)", :field-alias "count"}
+      {:field-name "action"}
+      {:field-name "activity_id"}
+      {:field-name "0", :field-alias "registered"}],
+     :from
+     [{:sub-select
+       {:distinct true,
+        :field-list
+        [{:field-name "context_user-id"}
+         {:field-name "action"}
+         {:field-name "activity_id"}],
+        :from [{:table-name "participation_log"}],
+        :where
+        [{:and
+          [{:left "space_id", :comparison "=", :right "?"}
+           {:left "status", :comparison "=", :right "1"}
+           {:left "context_user_id", :comparison "<", :right "0"}
+           {:left "action",
+            :comparison "in",
+            :right
+            {:sub-select
+             {:field-list [{:field-name "id"}],
+              :from [{:table-name "participation_log_type"}],
+              :where
+              [{:left "action",
+                :comparison "in",
+                :right
+                "('action-tag-rendered','action-combine-rendered','action-vote-rendered','action-rate-rendered','action-prioritise-rendered','action-actions-rendered')"}]}}}]}]}}],
+     :group-by
+     [{:field-name "action"} {:field-name "activity_id"}]}}]})
+   
+
+#_(process-command
+    {:operation :select,
+  :field-list [{:field-name "*"}],
+  :from
+  [{:sub-select
+    {:field-list
+     [{:field-name "count(action)", :field-alias "count"}
+      {:field-name "action"}
+      {:field-name "activity_id"}
+      {:field-name "1", :field-alias "registered"}],
+     :from
+     [{:sub-select
+       {:distinct true,
+        :field-list
+        [{:field-name "context_user-id"}
+         {:field-name "action"}
+         {:field-name "activity_id"}],
+        :from [{:table-name "participation_log"}],
+        :where
+        [{:and
+          [{:left "space_id", :comparison "=", :right "?"}
+           {:left "status", :comparison "=", :right "1"}
+           {:left "context_user_id", :comparison ">", :right "0"}
+           {:left "action",
+            :comparison "in",
+            :right
+            {:sub-select
+             {:field-list [{:field-name "id"}],
+              :from [{:table-name "participation_log_type"}],
+              :where
+              [{:left "action",
+                :comparison "in",
+                :right
+                "('action-tag-rendered','action-combine-rendered','action-vote-rendered','action-rate-rendered','action-prioritise-rendered','action-actions-rendered')"}]}}}]}]}}],
+     :group-by [{:field-name "action"} {:field-name "activity_id"}]}}
+   {:join-type :union,
+    :sub-select
+    {:field-list
+     [{:field-name "count(action)", :field-alias "count"}
+      {:field-name "action"}
+      {:field-name "activity_id"}
+      {:field-name "0", :field-alias "registered"}],
+     :from
+     [{:sub-select
+       {:distinct true,
+        :field-list
+        [{:field-name "context_user-id"}
+         {:field-name "action"}
+         {:field-name "activity_id"}],
+        :from [{:table-name "participation_log"}],
+        :where
+        [{:and
+          [{:left "space_id", :comparison "=", :right "?"}
+           {:left "status", :comparison "=", :right "1"}
+           {:left "context_user_id", :comparison "<", :right "0"}
+           {:left "action",
+            :comparison "in",
+            :right
+            {:sub-select
+             {:field-list [{:field-name "id"}],
+              :from [{:table-name "participation_log_type"}],
+              :where
+              [{:left "action",
+                :comparison "in",
+                :right
+                "('action-tag-rendered','action-combine-rendered','action-vote-rendered','action-rate-rendered','action-prioritise-rendered','action-actions-rendered')"}]}}}]}]}}],
+     :group-by
+     [{:field-name "action"} {:field-name "activity_id"}]}}]})
+
 
 
 #_{:operation :write,
