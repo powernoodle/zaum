@@ -164,15 +164,32 @@
     )
 )
 
-(defn process-where-clause [clauses]
-  (if (some? clauses) (apply str ["WHERE " (process-condition-block clauses)]) ""))
+(defn process-where-clause [clauses-in]
+  (let [clauses (cond
+                  (map? clauses-in)
+                  [clauses-in]
+                  :else
+                  clauses-in)]
+    (if (some? clauses) (apply str ["WHERE " (process-condition-block clauses)]) "")))
   
-(defn process-having-clause [clauses]
-  (if (some? clauses) (apply str ["HAVING " (process-condition-block clauses)]) ""))
+(defn process-having-clause [clauses-in]
+  (let [clauses (cond
+                  (map? clauses-in)
+                  [clauses-in]
+                  :else
+                  clauses-in)]
+    (if (some? clauses) (apply str ["HAVING " (process-condition-block clauses)]) "")))
 
-(defn process-from-clause [clauses]
+(defn process-from-clause [clauses-in]
   ;;(apply str ["FROM "
-  (let [things
+  (let [clauses (cond
+                  (string? clauses-in)
+                  [{:table-name clauses-in}]
+                  (map? clauses-in)
+                  [clauses-in]
+                  :else
+                  clauses-in)
+        things
               (map (fn [clause]
                      (condp #(contains? %2 %1) clause
                        :join-type
@@ -202,17 +219,11 @@
                                               "CROSS JOIN"
                                               :unnamed-join
                                               ", "
-                                              :union
-                                              "UNION"
-                                              :union-all
-                                              "UNION ALL"
                                               )
                              args [join-type-text
                                    (if (contains? clause :sub-select) (process-sub-select (:sub-select clause)) table-name)
                                    (if (contains? clause :table-alias) table-alias)
-                                   (if (or (= join-type :unnamed-join)
-                                           (= join-type :union)
-                                           (= join-type :union-all))
+                                   (if (= join-type :unnamed-join)
                                      ""
                                      "ON") 
                                    join-clause-text]
@@ -221,9 +232,21 @@
                              )
                        (let [sub-select (:sub-select clause)
                              sub-select-text (process-select-command sub-select)
+                             union (cond
+                                     (contains? clause :union)
+                                     (process-union (:union clause))
+                                     (contains? clause :union-all)
+                                     (process-union-all (:union-all clause))
+                                     :else nil)
                              table-name (:table-name clause)
                              table-alias (:table-alias clause)
-                             args [(if (contains? clause :sub-select) (process-sub-select (:sub-select clause)) table-name) table-alias]]
+                             args [(cond
+                                     (contains? clause :sub-select)
+                                     (process-sub-select (:sub-select clause))
+                                     (some? union)
+                                     union
+                                     :else
+                                     table-name) table-alias]]
                          (clojure.string/join " " args))
                      )) clauses);;]
   ;;)
@@ -232,8 +255,15 @@
  
   )
 
-(defn process-field-list-select [clauses]
-  (let [things
+(defn process-field-list-select [clauses-in]
+  (let [clauses (cond
+                  (string? clauses-in)
+                  [{:field-name clauses-in}]
+                  (map? clauses-in)
+                  [clauses-in]
+                  :else
+                  clauses-in)
+        things
         (map (fn [clause]
                (let [field-name  (:field-name clause)
                      field-alias (:field-alias clause)
@@ -244,16 +274,30 @@
                  (clojure.string/join "" args))) clauses)]
     (clojure.string/join ", " things)))
 
-(defn process-field-list-insert-dest [clauses]
-  (let [things
+(defn process-field-list-insert-dest [clauses-in]
+  (let [clauses (cond
+                  (string? clauses-in)
+                  [{:field-name clauses-in}]
+                  (map? clauses-in)
+                  [clauses-in]
+                  :else
+                  clauses-in)
+        things
         (map (fn [clause]
                (let [field-name  (:field-name clause)
                      args [field-name]]
                  (clojure.string/join "" args))) clauses)]
     (clojure.string/join ", " things)))
 
-(defn process-field-list-order-by [clauses]
-  (let [things
+(defn process-field-list-order-by [clauses-in]
+  (let [clauses (cond
+                  (string? clauses-in)
+                  [{:field-name clauses-in}]
+                  (map? clauses-in)
+                  [clauses-in]
+                  :else
+                  clauses-in)
+        things
         (map (fn [clause]
                (let [field-name  (:field-name clause)
                      sort-order (:sort-order clause nil)
@@ -269,8 +313,13 @@
                  (clojure.string/join "" args))) clauses)]
     (clojure.string/join ", " things)))
 
-(defn process-field-list-insert-values [clauses]
-  (let [things
+(defn process-field-list-insert-values [clauses-in]
+  (let [clauses (cond
+                  (map? clauses-in)
+                  [clauses-in]
+                  :else
+                  clauses-in)
+        things
         (map (fn [clause]
                (let [set-to  (if (or
                                   (nil? (:set-to clause))
@@ -281,8 +330,13 @@
                  (clojure.string/join "" args))) clauses)]
     (clojure.string/join ", " things)))
 
-(defn process-field-list-update [clauses]
-  (let [things
+(defn process-field-list-update [clauses-in]
+  (let [clauses (cond
+                  (map? clauses-in)
+                  [clauses-in]
+                  :else
+                  clauses-in)
+        things
         (map (fn [clause]
                (let [field-name  (:field-name clause)
                      set-to (if (or
@@ -704,6 +758,32 @@
 
 #_(validate-command {:operation :select })
 
+(defn substitute-parameters [^java.sql.PreparedStatement ps params]
+  (doseq [[idx param] (map-indexed (fn [i a] [(inc i) a]) params)]
+    (condp = (:type param)
+      :bigdecimal
+      (.setBigDecimal ps idx (:value param))
+      :boolean
+      (.setBoolean ps idx (:value param))
+      :date
+      (.setDate ps idx (:value param))
+      :double
+      (.setDouble ps idx (:value param))
+      :float
+      (.setFloat ps idx (:value param))
+      :int
+      (.setInt ps idx (:value param))
+      :long
+      (.setLong ps idx (:value param))
+      :string
+      (.setString ps idx (:value param))
+      :time
+      (.setTime ps idx (:value param))
+      :timestamp
+      (.setTimestamp ps idx (:value param))
+      ))
+  ps)
+
 (defn process-command [clauses]
   (let [in-operation (:operation clauses :select)
         operation (condp = in-operation
@@ -804,9 +884,9 @@
                                                :where-clause where})
                       "NOT YET IMPLEMENTED")
         replacement-values (:replacement-values clauses nil)
-        run-result {:blah "NA"} #_(if (some? replacement-values)
-                     (let [run-me-please (vec (concat (vector actual-sql) replacement-values))]
-                       (jdbc/execute! connection run-me-please))
+        run-result (if (some? replacement-values)
+                     (let [ps (substitute-parameters (jdbc/prepare connection [actual-sql]) replacement-values)]
+                       (jdbc/execute! ps))
                      (jdbc/execute! connection [actual-sql]))]
     {:count (if (contains? run-result :update-count) (:update-count run-result) 1)
      :command clauses
@@ -828,6 +908,86 @@
   (let [dbspec (:connection-info connection-info)
         ds (jdbc/get-datasource dbspec)]
     (jdbc/get-connection ds)))
+
+#_(process-command
+ {:operation :insert
+  :connection con
+  :field-list [{:field-name "name"
+                :set-to "?"}]
+  :into [{:table-name "bob_dummy"}]
+  :replacement-values [{:type :string
+                        :value "Danny"}]})
+
+#_(process-command
+ {:operation :select
+  :replacement-values [{:type :string :value "First Thing Here"}
+                       {:type :string :value "Second Thing Here"}]
+  :connection "PUT YOUR CONNECTION OBJECT HERE"
+  :field-list "*"
+  :from {:union [
+    {:field-list
+     [{:field-name "count(action)", :field-alias "count"}
+      {:field-name "action"}
+      {:field-name "activity_id"}
+      {:field-name "1", :field-alias "registered"}],
+     :from
+     [{:sub-select
+       {:distinct true,
+        :field-list
+        [{:field-name "context_user-id"}
+         {:field-name "action"}
+         {:field-name "activity_id"}],
+        :from "participation_log",
+        :where
+        [{:and
+          [{:left "space_id", :comparison "=", :right "?"}
+           {:left "status", :comparison "=", :right "1"}
+           {:left "context_user_id", :comparison ">", :right "0"}
+           {:left "action",
+            :comparison "in",
+            :right
+            {:sub-select
+             {:field-list "id",
+              :from "participation_log_type",
+              :where
+              [{:left "action",
+                :comparison "in",
+                :right
+                "('action-tag-rendered','action-combine-rendered','action-vote-rendered','action-rate-rendered','action-prioritise-rendered','action-actions-rendered')"}]}}}]}]}}],
+    :group-by [{:field-name "action"} {:field-name "activity_id"}]}
+   {:field-list
+     [{:field-name "count(action)", :field-alias "count"}
+      {:field-name "action"}
+      {:field-name "activity_id"}
+      {:field-name "0", :field-alias "registered"}],
+     :from
+     [{:sub-select
+       {:distinct true,
+        :field-list
+        [{:field-name "context_user-id"}
+         {:field-name "action"}
+         {:field-name "activity_id"}],
+        :from "participation_log",
+        :where
+        [{:and
+          [{:left "space_id", :comparison "=", :right "?"}
+           {:left "status", :comparison "=", :right "1"}
+           {:left "context_user_id", :comparison "<", :right "0"}
+           {:left "action",
+            :comparison "in",
+            :right
+            {:sub-select
+             {:field-list "id",
+              :from "participation_log_type",
+              :where
+              [{:left "action",
+                :comparison "in",
+                :right
+                "('action-tag-rendered','action-combine-rendered','action-vote-rendered','action-rate-rendered','action-prioritise-rendered','action-actions-rendered')"}]}}}]}]}}],
+     :group-by
+    [{:field-name "action"} {:field-name "activity_id"}]}]}})
+
+
 
 #_(process-command
  {:operation :select
@@ -994,12 +1154,12 @@
                   [{:field-name "name", :set-to "?"}]
                   :replacement-values ["Nick"]})
 
-#_(def dbspec {:dbtype "mysql"
-             :dbname "your-db-name?zeroDateTimeBehavior=convertToNull&useUnicode=true&characterEncoding=UTF-8"
-             :host "your-db-host"
-             :port "3306"
-             :user "dev"
-             :password "your-password"})
+#_(def dbspec {:connection-info {:dbtype "mysql"
+                                 :dbname "your-db-name?zeroDateTimeBehavior=convertToNull&useUnicode=true&characterEncoding=UTF-8"
+                                 :host "your-db-host"
+                                 :port "3306"
+                                 :user "dev"
+                                 :password "your-password"}})
 
 #_(def ds (next.jdbc/get-datasource dbspec))
 
