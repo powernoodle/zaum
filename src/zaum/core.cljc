@@ -1,5 +1,5 @@
 (ns zaum.core
-  (:require [next.jdbc :as jdbc]))
+    (:import (java.sql Connection DriverManager PreparedStatement ResultSet Statement ResultSetMetaData)))
 
 (defmulti prepare-connection :dbtype)
 
@@ -132,53 +132,59 @@
 
 (defn process-condition-block [clauses & {:keys [stringify?] :or {stringify? true}}]
   ;;(clojure.pprint/pprint clauses)
-  (let [things
-  (map (fn [clause]
-         ;;(clojure.pprint/pprint clause)
-         (condp #(contains? %2 %1) clause
-           :or
-           (let [myclause (:or clause)]
-             ;;(clojure.pprint/pprint "OR found: ")
-             (apply str ["(" (clojure.string/join " OR " (process-condition-block myclause :stringify? false)) ")"]))
-           :and
-           (let [myclause (:and clause)]
-             #_(clojure.pprint/pprint (process-condition-block myclause))
-             (apply str ["(" (clojure.string/join " AND " (process-condition-block myclause :stringify? false)) ")"])
+  (if (string? clauses)
+    clauses
+    (let [things
+          (map (fn [clause]
+                 ;;(clojure.pprint/pprint clause)
+                 (if (string? clause)
+                   (clause)
+                   (condp #(contains? %2 %1) clause
+                     :or
+                     (let [myclause (:or clause)]
+                       ;;(clojure.pprint/pprint "OR found: ")
+                       (apply str ["(" (clojure.string/join " OR " (process-condition-block myclause :stringify? false)) ")"]))
+                     :and
+                     (let [myclause (:and clause)]
+                       #_(clojure.pprint/pprint (process-condition-block myclause))
+                       (apply str ["(" (clojure.string/join " AND " (process-condition-block myclause :stringify? false)) ")"])
 
-             )
-           (let [
-                  left (process-left-or-right (:left clause "ERROR"))
-                  comparison (:comparison clause "ERROR")
-                  right (process-left-or-right (:right clause "ERROR"))
-                  args [left comparison right]
-                  ]
-                 (clojure.string/join " " args))
-         ))
-          clauses
-          )]
-    (if stringify?
-      (apply str things)
-      things)
-    
-  
-    )
+                       )
+                     (let [
+                           left (process-left-or-right (:left clause "ERROR"))
+                           comparison (:comparison clause "ERROR")
+                           right (process-left-or-right (:right clause "ERROR"))
+                           args [left comparison right]
+                           ]
+                       (clojure.string/join " " args))
+                     )))
+               clauses
+               )]
+                         (if stringify?
+                           (apply str things)
+                           things)
+  ))
 )
 
 (defn process-where-clause [clauses-in]
-  (let [clauses (cond
-                  (map? clauses-in)
-                  [clauses-in]
-                  :else
-                  clauses-in)]
-    (if (some? clauses) (apply str ["WHERE " (process-condition-block clauses)]) "")))
+  (if (string? clauses-in)
+    (apply str ["WHERE " clauses-in])
+    (let [clauses (cond
+                                          (map? clauses-in)
+                                          [clauses-in]
+                                          :else
+                                          clauses-in)]
+                            (if (some? clauses) (apply str ["WHERE " (process-condition-block clauses)]) ""))))
   
 (defn process-having-clause [clauses-in]
-  (let [clauses (cond
-                  (map? clauses-in)
-                  [clauses-in]
-                  :else
-                  clauses-in)]
-    (if (some? clauses) (apply str ["HAVING " (process-condition-block clauses)]) "")))
+  (if (string? clauses-in)
+    (apply str ["HAVING " clauses-in])
+    (let [clauses (cond
+                                          (map? clauses-in)
+                                          [clauses-in]
+                                          :else
+                                          clauses-in)]
+                            (if (some? clauses) (apply str ["HAVING " (process-condition-block clauses)]) ""))))
 
 (defn process-from-clause [clauses-in]
   ;;(apply str ["FROM "
@@ -191,64 +197,70 @@
                   clauses-in)
         things
               (map (fn [clause]
-                     (condp #(contains? %2 %1) clause
-                       :join-type
-                       (let [table-name (:table-name clause)
-                             table-alias (:table-alias clause)
-                             sub-select (:sub-select clause)
-                             sub-select-text (process-select-command sub-select)
-                             union (cond
-                                     (contains? clause :union)
-                                     (process-union (:union clause))
-                                     (contains? clause :union-all)
-                                     (process-union-all (:union-all clause))
-                                     :else nil)
-                             join-clause (:join-clause clause)
-                             join-clause-text (process-condition-block join-clause)
-                             join-type (:join-type clause)
-                             join-type-text (condp = join-type
-                                              :inner-join
-                                              "INNER JOIN"
-                                              :left-outer-join
-                                              "LEFT OUTER JOIN"
-                                              :right-outer-join
-                                              "RIGHT-OUTER-JOIN"
-                                              :full-outer-join
-                                              "FULL OUTER JOIN"
-                                              :cross-join
-                                              "CROSS JOIN"
-                                              :unnamed-join
-                                              ", "
-                                              )
-                             args [join-type-text
-                                   (if (contains? clause :sub-select) (process-sub-select (:sub-select clause)) table-name)
-                                   (if (contains? clause :table-alias) table-alias)
-                                   (if (= join-type :unnamed-join)
-                                     ""
-                                     "ON") 
-                                   join-clause-text]
-                             ]
-                             (clojure.string/join " " args)
-                             )
-                       (let [sub-select (:sub-select clause)
-                             sub-select-text (process-select-command sub-select)
-                             union (cond
-                                     (contains? clause :union)
-                                     (process-union (:union clause))
-                                     (contains? clause :union-all)
-                                     (process-union-all (:union-all clause))
-                                     :else nil)
-                             table-name (:table-name clause)
-                             table-alias (:table-alias clause)
-                             args [(cond
-                                     (contains? clause :sub-select)
-                                     (process-sub-select (:sub-select clause))
-                                     (some? union)
-                                     union
-                                     :else
-                                     table-name) table-alias]]
-                         (clojure.string/join " " args))
-                     )) clauses);;]
+                     (if (string? clause)
+                       clause
+                       (condp #(contains? %2 %1) clause
+                                           :join-type
+                                           (let [table-name (:table-name clause)
+                                                 table-alias (:table-alias clause)
+                                                 sub-select (:sub-select clause)
+                                                 sub-select-text (process-select-command sub-select)
+                                                 union (cond
+                                                         (contains? clause :union)
+                                                         (process-union (:union clause))
+                                                         (contains? clause :union-all)
+                                                         (process-union-all (:union-all clause))
+                                                         :else nil)
+                                                 join-clause (:join-clause clause)
+                                                 join-clause-text (process-condition-block join-clause)
+                                                 join-type (:join-type clause)
+                                                 join-type-text (condp = join-type
+                                                                  :inner-join
+                                                                  "INNER JOIN"
+                                                                  :left-outer-join
+                                                                  "LEFT OUTER JOIN"
+                                                                  :right-outer-join
+                                                                  "RIGHT-OUTER-JOIN"
+                                                                  :full-outer-join
+                                                                  "FULL OUTER JOIN"
+                                                                  :cross-join
+                                                                  "CROSS JOIN"
+                                                                  :unnamed-join
+                                                                  ", "
+                                                                  )
+                                                 args [join-type-text
+                                                       (if (contains? clause :sub-select) (process-sub-select (:sub-select clause)) table-name)
+                                                       (if (contains? clause :table-alias) " ")
+                                                       (if (contains? clause :table-alias) table-alias)
+                                                       (if (some? join-clause-text) " ")
+                                                       (if (= join-type :unnamed-join)
+                                                         ""
+                                                         "ON ") 
+                                                       join-clause-text]
+                                                 ]
+                                             (clojure.string/join "" args)
+                                             )
+                                           (let [sub-select (:sub-select clause)
+                                                 sub-select-text (process-select-command sub-select)
+                                                 union (cond
+                                                         (contains? clause :union)
+                                                         (process-union (:union clause))
+                                                         (contains? clause :union-all)
+                                                         (process-union-all (:union-all clause))
+                                                         :else nil)
+                                                 table-name (:table-name clause)
+                                                 table-alias (:table-alias clause)
+                                                 args [(cond
+                                                         (contains? clause :sub-select)
+                                                         (process-sub-select (:sub-select clause))
+                                                         (some? union)
+                                                         union
+                                                         :else
+                                                         table-name)
+                                                       (if (some? table-alias) " ")
+                                                       table-alias]]
+                                             (clojure.string/join "" args))
+                                           ))) clauses);;]
   ;;)
         ]
     (clojure.string/join " " things))
@@ -265,13 +277,15 @@
                   clauses-in)
         things
         (map (fn [clause]
-               (let [field-name  (:field-name clause)
-                     field-alias (:field-alias clause)
-                     table-alias (:table-alias clause)
-                     args [(if (contains? clause :table-alias) (str table-alias "."))
-                           field-name
-                           (if (contains? clause :field-alias) (str " AS " field-alias))]]
-                 (clojure.string/join "" args))) clauses)]
+               (if (string? clause)
+                 clause
+                 (let [field-name  (:field-name clause)
+                                         field-alias (:field-alias clause)
+                                         table-alias (:table-alias clause)
+                                         args [(if (contains? clause :table-alias) (str table-alias "."))
+                                               field-name
+                                               (if (contains? clause :field-alias) (str " AS " field-alias))]]
+                                     (clojure.string/join "" args)))) clauses)]
     (clojure.string/join ", " things)))
 
 (defn process-field-list-insert-dest [clauses-in]
@@ -284,9 +298,11 @@
                   clauses-in)
         things
         (map (fn [clause]
-               (let [field-name  (:field-name clause)
-                     args [field-name]]
-                 (clojure.string/join "" args))) clauses)]
+               (if (string? clause)
+                 clause
+                 (let [field-name  (:field-name clause)
+                                         args [field-name]]
+                                     (clojure.string/join "" args)))) clauses)]
     (clojure.string/join ", " things)))
 
 (defn process-field-list-order-by [clauses-in]
@@ -299,18 +315,20 @@
                   clauses-in)
         things
         (map (fn [clause]
-               (let [field-name  (:field-name clause)
-                     sort-order (:sort-order clause nil)
-                     sort-order-text (condp = sort-order
-                                       :desc
-                                       "DESC"
-                                       :asc
-                                       "ASC"
-                                       "UNKNOWN SORT ORDER")
-                     args [field-name
-                           (if (some? sort-order) " ")
-                           (if (some? sort-order) sort-order-text)]]
-                 (clojure.string/join "" args))) clauses)]
+               (if (string? clause)
+                 clause
+                 (let [field-name  (:field-name clause)
+                                         sort-order (:sort-order clause nil)
+                                         sort-order-text (condp = sort-order
+                                                           :desc
+                                                           "DESC"
+                                                           :asc
+                                                           "ASC"
+                                                           "UNKNOWN SORT ORDER")
+                                         args [field-name
+                                               (if (some? sort-order) " ")
+                                               (if (some? sort-order) sort-order-text)]]
+                                     (clojure.string/join "" args)))) clauses)]
     (clojure.string/join ", " things)))
 
 (defn process-field-list-insert-values [clauses-in]
@@ -388,63 +406,82 @@
                           (contains? clauses :order-by-clause) (:order-by-clause clauses)
                           (contains? clauses :order-by) (:order-by clauses)
                           :else nil)
-        command-text (if (= distinct true) "SELECT DISTINCT" "SELECT")
+        command-text (if (= distinct true) "SELECT DISTINCT " "SELECT ")
         field-text (process-field-list-select field-clause)
-        mid-command1 "FROM"
+        mid-command1 " FROM "
         from-text (process-from-clause from-clause)
         where-text (process-where-clause where-clause)
         group-by-text (process-group-by-clause group-by-clause)
         having-text (process-having-clause having-clause)
         order-by-text (process-order-by-clause order-by-clause)
-        args [command-text field-text "FROM" from-text where-text group-by-text having-text order-by-text]]
-    (clojure.string/join " " args)))
+        args [command-text
+              field-text
+              mid-command1
+              from-text
+              (if (some? where-clause) " " "")
+              where-text
+              (if (some? group-by-clause) " " "")
+              group-by-text
+              (if (some? having-clause) " " "")
+              having-text
+              (if (some? order-by-clause) " " "")
+              order-by-text]]
+    (clojure.string/join "" args)))
 
 (defn process-insert-values-command [clauses]
   (let [to-clause (:to-clause clauses)
         field-clause (:field-clause clauses)
-        command-text "INSERT INTO"
+        command-text "INSERT INTO "
         dest-text (process-from-clause to-clause)
-        mid-command1 "("
+        mid-command1 " ( "
         field-text (process-field-list-insert-dest field-clause)
-        mid-command2 ") VALUES ("
+        mid-command2 " ) VALUES ( "
         values-text (process-field-list-insert-values field-clause)
-        mid-command3 ")"
+        mid-command3 " )"
         args [command-text dest-text mid-command1 field-text mid-command2 values-text mid-command3]]
-    (clojure.string/join " " args)))
+    (clojure.string/join "" args)))
 
 (defn process-insert-select-command [clauses]
   (let [to-clause (:to-clause clauses)
         field-clause (:field-clause clauses)
         select-clause (:select-clause clauses)
-        command-text "INSERT INTO"
+        command-text "INSERT INTO "
         dest-text (process-from-clause to-clause)
-        mid-command1 "("
+        mid-command1 " ( "
         field-text (process-field-list-insert-dest field-clause)
-        mid-command2 ")"
+        mid-command2 " ) "
         select-text (process-select-command select-clause)
         args [command-text dest-text mid-command1 field-text mid-command2 select-text]]
-    (clojure.string/join " " args)))
+    (clojure.string/join "" args)))
 
 (defn process-delete-command [clauses]
   (let [from-clause (:from-clause clauses)
         where-clause (:where-clause clauses nil)
-        command-text "DELETE FROM"
+        command-text "DELETE FROM "
         from-text (process-from-clause from-clause)
         where-text (process-where-clause where-clause)
-        args [command-text from-text where-text]]
-    (clojure.string/join " " args)))
+        args [command-text
+              from-text
+              (if (some? where-clause) " " "")
+              where-text]]
+    (clojure.string/join "" args)))
 
 (defn process-update-simple-command [clauses]
   (let [from-clause (:from-clause clauses)
         field-clause (:field-clause clauses)
         where-clause (:where-clause clauses nil)
-        command-text "UPDATE"
+        command-text "UPDATE "
         from-text (process-from-clause from-clause)
-        mid-command1 "SET"
+        mid-command1 " SET "
         field-text (process-field-list-update field-clause)
         where-text (process-where-clause where-clause)
-        args [command-text from-text mid-command1 field-text where-text]]
-    (clojure.string/join " " args)))
+        args [command-text
+              from-text
+              mid-command1
+              field-text
+              (if (some? where-clause) " " "")
+              where-text]]
+    (clojure.string/join "" args)))
 
 (defn process-field-list-create-table [clauses]
   (let [things
@@ -493,20 +530,20 @@
         sub-select (:insert-select clauses)]
     (cond = target-type
           :table
-          (let [command-text "CREATE TABLE"
+          (let [command-text "CREATE TABLE "
                 table-name (:table-name into)
-                mid-command1 "("
+                mid-command1 " ( "
                 field-text (process-field-list-create-table field-list)
-                mid-command2 ")"
+                mid-command2 " ) "
                 args [command-text table-name mid-command1 field-text mid-command2]]
-            (clojure.string/join " " args))
+            (clojure.string/join "" args))
           :view
-          (let [command-text "CREATE VIEW"
+          (let [command-text "CREATE VIEW "
                 view-name (:table-name into)
-                mid-command1 "AS"
+                mid-command1 " AS "
                 select-text (process-select-command sub-select)
                 args [command-text view-name mid-command1 select-text]]
-            (clojure.string/join " " args))
+            (clojure.string/join "" args))
           :else
           "UNKNOWN TARGET-TYPE"
           )))
@@ -516,13 +553,13 @@
         into (:into clauses)
         command (cond = target-type
                       :table
-                      "DROP TABLE"
+                      "DROP TABLE "
                       :view
-                      "DROP VIEW"
+                      "DROP VIEW "
                       :else
-                      "UNKNOWN TARGET-TYPE")
+                      "UNKNOWN TARGET-TYPE ")
         args [command into]]
-    (clojure.string/join " " args)))
+    (clojure.string/join "" args)))
 
 (defn process-transaction-start-command [clauses]
   "BEGIN TRANSACTION")
@@ -784,7 +821,257 @@
       ))
   ps)
 
+(defn get-prepared-statement-internal [^java.sql.Connection conn statement]
+  (.prepareStatement conn statement))
+
+(defn get-result-set [^java.sql.PreparedStatement ps]
+  (.executeQuery ps))
+
+(defn get-result-set-meta-data [^java.sql.ResultSet rs]
+  (.getMetaData rs))
+
+(defn get-result-set-meta-data-columns [^java.sql.ResultSetMetaData rsmd]
+  (let [column-count (.getColumnCount rsmd)
+        column-names (mapv (fn [i] (keyword (clojure.string/replace (.getColumnLabel rsmd i) " " "-"))) (range 1 (+ 1 column-count)))]
+    column-names))
+
+(defn run-prepared-statement [^java.sql.PreparedStatement ps]
+  (.executeUpdate ps))
+
+(defn get-results-vectors [^java.sql.ResultSet rs ^java.sql.ResultSetMetaData rsmd]
+  (vec (for [x (repeat 0)
+            :while (.next rs)]
+        (mapv (fn [i] (.getObject rs i)) (range 1 (+ 1 (.getColumnCount rsmd)))))))
+
+(defn get-first-result-vector [^java.sql.ResultSet rs ^java.sql.ResultSetMetaData rsmd]
+  (first (get-results-vectors rs rsmd)))
+
+(defn get-results-maps [^java.sql.ResultSet rs ^java.sql.ResultSetMetaData rsmd]
+  (vec (for [x (repeat 0)
+             :while (.next rs)]
+         (into {} (mapv (fn [i] {(keyword (clojure.string/replace (.getColumnLabel rsmd i) " " "-")) (.getObject rs i)}) (range 1 (+ 1 (.getColumnCount rsmd))))))))
+
+(defn get-first-result-map [^java.sql.ResultSet rs ^java.sql.ResultSetMetaData rsmd]
+  (first (get-results-maps rs rsmd)))
+
+(defn result-set-vector-seq
+  ([^java.sql.ResultSet rs] (let [rsmd (get-result-set-meta-data rs)]
+                              (result-set-vector-seq rs rsmd)))
+  ([^java.sql.ResultSet rs
+    ^java.sql.ResultSetMetaData rsmd] (let [next (if (.isAfterLast rs) false (.next rs))]
+                                        (if next
+                                          (lazy-seq (cons (mapv
+                                                           (fn [i] (.getObject rs i))
+                                                           (range 1 (+ 1 (.getColumnCount rsmd))))
+                                                          (result-set-vector-seq rs rsmd)))
+                                          nil))))
+
+(defn say-hi []
+  "Hi")
+
+(defn temp-seq
+  ([] (do
+        (println "(temp-seq) called")
+        (temp-seq 1)))
+  ([n] (do
+         (println "(temp-seq 1) called")
+         (lazy-seq (cons (say-hi) (temp-seq 1))))))
+
+(defn newtempseq []
+  (repeatedly #(say-hi)))
+
+(defn result-set-vector-seq2 [^java.sql.ResultSet rs]
+  (let [rsmd (get-result-set-meta-data rs)]
+    (repeatedly #(let [next (if (.isAfterLast rs) false (.next rs))]
+                   (when next
+                     (mapv
+                      (fn [i] (.getObject rs i))
+                      (range 1 (+ 1 (.getColumnCount rsmd)))))))))
+
+
+#_(def con (get-connection {:connection-info {:dbtype "mysql"
+                                                 :dbname "your-db-name?zeroDateTimeBehavior=convertToNull&useUnicode=true&characterEncoding=UTF-8"
+                                                 :host "your-db-host"
+                                                 :port "3306"
+                                                 :user "dev"
+                                                 :password "your-password"}}))
+
+  #_(process-command {:connection con
+                      :operation :update-simple
+                      :return-type :all-rows-as-maps
+                      :into "bob_dummy"
+                      :field-list [{:field-name "name" :set-to "'D'||name"}]
+                      :where [{:left "name"
+                               :comparison "like"
+                               :right "'D%'"}]})
+
 (defn process-command [clauses]
+  (let [start-timestamp (System/currentTimeMillis)
+        ps-in (:prepared-statement clauses nil)
+        in-operation (:operation clauses (if (map? ps-in) (:operation (:statement ps-in)) :select))
+        operation (condp = in-operation
+                    :read :select
+                    :write :insert
+                    :write-from-read :insert-from-select
+                    :change-simple :update-simple
+                    :change-multi :update-multi
+                    :write-change :merge
+                    in-operation
+                    )
+        distinct (:distinct clauses (if (map? ps-in) (:distinct (:statement ps-in)) false))
+        connection (:connection clauses (if (map? ps-in) (:connection (:statement ps-in)) nil))
+        fault-tolerance (:fault-tolerance clauses (if (map? ps-in) (:fault-tolerance (:statement ps-in)) :strict))
+        target-type (:target-type clauses (if (map? ps-in) (:target-type (:statement ps-in)) :table))
+        simulate (:simulate clauses :true)
+        return-type (:return-type clauses :all-rows-as-vectors)
+        field-list (:field-list clauses (if (map? ps-in) (:field-list (:statement ps-in)) nil))
+        from (cond
+               (contains? clauses :from) (:from clauses)
+               (contains? clauses :source) (:source clauses)
+               :else (if (map? ps-in) (cond
+                                        (contains? (:statement ps-in) :from) (:from (:statement ps-in))
+                                        (contains? (:statement ps-in) :source) (:source (:statement ps-in))
+                                        :else nil) nil))
+        into (cond
+               (contains? clauses :into) (:into clauses)
+               (contains? clauses :destination) (:destination clauses)
+               :else (if (map? ps-in) (cond
+                                        (contains? (:statement ps-in) :from) (:into (:statement ps-in))
+                                        (contains? (:statement ps-in) :source) (:destination (:statement ps-in))
+                                        :else nil) nil))
+        insert-select (:insert-select clauses (if (map? ps-in) (:insert-select (:statement ps-in)) nil))
+        where (cond
+                (contains? clauses :where) (:where clauses)
+                (contains? clauses :conditions) (:conditions clauses)
+                (contains? clauses :selector) (:selector clauses)
+                :else (if (map? ps-in) (cond
+                                         (contains? (:statement ps-in) :where) (:where (:statement ps-in))
+                                         (contains? (:statement ps-in) :conditions) (:conditions (:statement ps-in))
+                                         (contains? (:statement ps-in) :selector) (:selector (:statement ps-in))
+                                         :else nil) nil))
+        having (:having clauses (if (map? ps-in) (:having (:statement ps-in)) nil))
+        group-by-list (:group-by clauses (if (map? ps-in) (:group-by (:statement ps-in)) nil))
+        order-by-list (:order-by clauses (if (map? ps-in) (:order-by (:statement ps-in)) nil))
+        actual-sql (if (some? ps-in)
+                     (if (map? ps-in) (:actual-sql ps-in) nil)
+                     (condp = operation
+                       :select
+                       (process-select-command {:distinct distinct
+                                                :field-clause field-list
+                                                :from-clause from
+                                                :where-clause where
+                                                :having-clause having
+                                                :group-by-clause group-by-list
+                                                :order-by-clause order-by-list})
+                       :insert
+                       (process-insert-values-command {:to-clause into
+                                                       :field-clause field-list})
+                       :insert-from-select
+                       (process-insert-select-command {:to-clause into
+                                                       :field-clause field-list
+                                                       :select-clause insert-select})
+                       :update-simple
+                       (process-update-simple-command {:from-clause into
+                                                       :field-clause field-list
+                                                       :where-clause where})
+                       :delete
+                       (process-delete-command {:from-clause from
+                                                :where-clause where})
+                       :drop
+                       (process-drop-command {:target-type target-type
+                                              :into into})
+                       :create
+                       (process-create-command {:target-type target-type
+                                                :into into
+                                                :field-list field-list
+                                                :insert-select insert-select})
+                       :transaction-start
+                       (process-transaction-start-command nil)
+                       :transaction-commit
+                       (process-transaction-commit-command nil)
+                       :transaction-rollback
+                       (process-transaction-rollback-command nil)
+                     "NOT YET IMPLEMENTED"))
+        simulate-sql (if (some? ps-in)
+                       nil
+                       (condp = operation
+                          :select
+                          (process-select-command {:field-clause [{:field-name "count(0)"}]
+                                                   :from-clause from
+                                                   :where-clause where
+                                                   :having-clause having
+                                                   :group-by-clause group-by-list
+                                                   :order-by-clause order-by-list})
+                          :insert
+                          "NOT VALID"
+                          :insert-from-select
+                          (process-select-command {:field-clause [{:field-name "count(0)"}]
+                                                   :from-clause (:from insert-select)
+                                                   :where-clause (:where insert-select nil)
+                                                   :having-clause (:having insert-select nil)
+                                                   :group-by-clause (:group-by insert-select nil)
+                                                   :order-by-clause (:order-by insert-select nil)})
+                          :update-simple
+                          (process-select-command {:from-clause into
+                                                   :field-clause [{:field-name "count(0)"}]
+                                                   :where-clause where})
+                          :delete
+                          (process-select-command {:from-clause from
+                                                   :field-clause [{:field-name "count(0)"}]
+                                                   :where-clause where})
+                          "NOT YET IMPLEMENTED"))
+        replacement-values (:replacement-values clauses nil)
+        ps (if (some? ps-in)
+             (if (some? replacement-values)
+               (substitute-parameters (if (map? ps-in) (:prepared-statement ps-in) ps-in) replacement-values)
+               (if (map? ps-in) (:prepared-statement ps-in) ps-in))
+             (if (some? replacement-values)
+                              (substitute-parameters (get-prepared-statement-internal connection actual-sql) replacement-values)
+                              (get-prepared-statement-internal connection actual-sql)))
+        
+        rs (if (= operation :select) (get-result-set ps) (run-prepared-statement ps))
+        rsmd (if (= operation :select) (get-result-set-meta-data rs) nil)
+        result-set (cond
+                     (= operation :select)
+                     (cond
+                       (= return-type :all-rows-as-maps)
+                       (get-results-maps rs rsmd)
+                       (= return-type :first-row-as-map)
+                       (get-first-result-map rs rsmd)
+                       (= return-type :first-row-as-vector)
+                       (get-first-result-vector rs rsmd)
+                       (= return-type :result-set)
+                       rs
+                       :else
+                       (get-results-vectors rs rsmd))
+                     :else nil)
+        end-timestamp (System/currentTimeMillis)
+        return-map {:result-set result-set
+                    :count (if (= operation :select)
+                             (if (= return-type :result-set)
+                               1
+                               (count result-set))
+                             rs)
+                    :command clauses
+                    :db-command actual-sql
+                    :simulate-db-command simulate-sql
+                    :statistics {:duration (- end-timestamp start-timestamp)
+                                 :start-time start-timestamp
+                                 :end-time end-timestamp}
+                    :result-headers (if (= operation :select)
+                                      (get-result-set-meta-data-columns rsmd)
+                                      nil)
+                    :status "PUT :error :ok OR :warning HERE"
+                    :status-source "PUT :db OR :internal HERE"
+                    :status-message "PUT STATUS MESSAGE HERE"
+                    :status-return-code "PUT STATUS RETURN CODE HERE"
+                    }]
+    (if (and (= operation :select) (not (= return-type :result-set)))
+      (.close rs))
+    (if (not (some? ps-in)) (.close ps))
+    return-map))
+
+(defn get-prepared-statement [clauses]
   (let [in-operation (:operation clauses :select)
         operation (condp = in-operation
                     :read :select
@@ -799,8 +1086,6 @@
         connection (:connection clauses)
         fault-tolerance (:fault-tolerance clauses :strict)
         target-type (:target-type clauses :table)
-        simulate (:simulate clauses :true)
-        return-type (:return-type clauses :all-rows-as-map)
         field-list (:field-list clauses nil)
         from (cond
                (contains? clauses :from) (:from clauses)
@@ -820,94 +1105,86 @@
         group-by-list (:group-by clauses nil)
         order-by-list (:order-by clauses nil)
         actual-sql (condp = operation
-                      :select
-                      (process-select-command {:distinct distinct
-                                               :field-clause field-list
-                                               :from-clause from
-                                               :where-clause where
-                                               :having-clause having
-                                               :group-by-clause group-by-list
-                                               :order-by-clause order-by-list})
-                      :insert
-                      (process-insert-values-command {:to-clause into
-                                                      :field-clause field-list})
-                      :insert-from-select
-                      (process-insert-select-command {:to-clause into
-                                                      :field-clause field-list
-                                                      :select-clause insert-select})
-                      :update-simple
-                      (process-update-simple-command {:from-clause into
-                                                      :field-clause field-list
-                                                      :where-clause where})
-                      :delete
-                      (process-delete-command {:from-clause from
-                                               :where-clause where})
-                      :drop
-                      (process-drop-command {:target-type target-type
-                                             :into into})
-                      :create
-                      (process-create-command {:target-type target-type
-                                               :into into
-                                               :field-list field-list
-                                               :insert-select insert-select})
-                      :transaction-start
-                      (process-transaction-start-command nil)
-                      :transaction-commit
-                      (process-transaction-commit-command nil)
-                      :transaction-rollback
-                      (process-transaction-rollback-command nil)
-                      "NOT YET IMPLEMENTED")
-        simulate-sql (condp = operation
-                      :select
-                      (process-select-command {:field-clause [{:field-name "count(0)"}]
-                                               :from-clause from
-                                               :where-clause where
-                                               :having-clause having
-                                               :group-by-clause group-by-list
-                                               :order-by-clause order-by-list})
-                      :insert
-                      "NOT VALID"
-                      :insert-from-select
-                      (process-select-command {:field-clause [{:field-name "count(0)"}]
-                                               :from-clause (:from insert-select)
-                                               :where-clause (:where insert-select nil)
-                                               :having-clause (:having insert-select nil)
-                                               :group-by-clause (:group-by insert-select nil)
-                                               :order-by-clause (:order-by insert-select nil)})
-                      :update-simple
-                      (process-select-command {:from-clause into
-                                               :field-clause [{:field-name "count(0)"}]
-                                               :where-clause where})
-                      :delete
-                      (process-select-command {:from-clause from
-                                               :field-clause [{:field-name "count(0)"}]
-                                               :where-clause where})
-                      "NOT YET IMPLEMENTED")
-        replacement-values (:replacement-values clauses nil)
-        run-result (if (some? replacement-values)
-                     (let [ps (substitute-parameters (jdbc/prepare connection [actual-sql]) replacement-values)]
-                       (jdbc/execute! ps))
-                     (jdbc/execute! connection [actual-sql]))]
-    {:count (if (contains? run-result :update-count) (:update-count run-result) 1)
-     :command clauses
-     :db-command actual-sql
-     :simulate-db-command simulate-sql
-     :statistics {:db-duration "PUT TIME SPENT IN DB HERE"
-                  :total-duration "PUT TOTAL TIME PROCESSING COMMAND HERE"
-                  :start-time "PUT START TIME OF COMMAND HERE"
-                  :end-time "PUT END TIME OF COMMAND HERE"}
-     :result-set run-result
-     :result-headers "PUT HEADERS FROM RESULT SET HERE"
-     :status "PUT :error :ok OR :warning HERE"
-     :status-source "PUT :db OR :internal HERE"
-     :status-message "PUT STATUS MESSAGE HERE"
-     :status-return-code "PUT STATUS RETURN CODE HERE"
-     }))
+                     :select
+                     (process-select-command {:distinct distinct
+                                              :field-clause field-list
+                                              :from-clause from
+                                              :where-clause where
+                                              :having-clause having
+                                              :group-by-clause group-by-list
+                                              :order-by-clause order-by-list})
+                     :insert
+                     (process-insert-values-command {:to-clause into
+                                                     :field-clause field-list})
+                     :insert-from-select
+                     (process-insert-select-command {:to-clause into
+                                                     :field-clause field-list
+                                                     :select-clause insert-select})
+                     :update-simple
+                     (process-update-simple-command {:from-clause into
+                                                     :field-clause field-list
+                                                     :where-clause where})
+                     :delete
+                     (process-delete-command {:from-clause from
+                                              :where-clause where})
+                     :drop
+                     (process-drop-command {:target-type target-type
+                                            :into into})
+                     :create
+                     (process-create-command {:target-type target-type
+                                              :into into
+                                              :field-list field-list
+                                              :insert-select insert-select})
+                     :transaction-start
+                     (process-transaction-start-command nil)
+                     :transaction-commit
+                     (process-transaction-commit-command nil)
+                     :transaction-rollback
+                     (process-transaction-rollback-command nil)
+                     "NOT YET IMPLEMENTED")
+        ps {:statement clauses
+            :actual-sql actual-sql
+            :prepared-statement (get-prepared-statement-internal connection actual-sql)}]
+    ps))
 
 (defn get-connection [connection-info]
   (let [dbspec (:connection-info connection-info)
-        ds (jdbc/get-datasource dbspec)]
-    (jdbc/get-connection ds)))
+        dbtype (:dbtype dbspec "mysql")
+        dbname (:dbname dbspec)
+        host (:host dbspec)
+        port (:port dbspec "3306")
+        user (:user dbspec)
+        password (:password dbspec)
+        classname "com.mysql.jdbc.Driver"
+        args ["jdbc:"
+              dbtype
+              "://"
+              host
+              ":"
+              port
+              "/"
+              dbname]
+        connect-string (clojure.string/join "" args)]
+    (clojure.lang.RT/loadClassForName classname)
+    (DriverManager/getConnection connect-string user password)))
+
+(defn close-connection [connection]
+  (.close connection))
+
+(defn close-result-set [rs]
+  (.close rs))
+
+(defn close-prepared-statement [ps]
+  (if (map? ps)
+    (.close (:prepared-statement ps))
+    (.close ps)))
+
+#_(def con (get-connection {:connection-info {:dbtype "mysql"
+                                              :dbname "your-db-name?zeroDateTimeBehavior=convertToNull&useUnicode=true&characterEncoding=UTF-8"
+                                              :host "your-db-host"
+                                              :port "3306"
+                                              :user "dev"
+                                              :password "your-password"}}))
 
 #_(process-command
  {:operation :insert
@@ -986,6 +1263,34 @@
                 "('action-tag-rendered','action-combine-rendered','action-vote-rendered','action-rate-rendered','action-prioritise-rendered','action-actions-rendered')"}]}}}]}]}}],
      :group-by
     [{:field-name "action"} {:field-name "activity_id"}]}]}})
+
+#_(process-command
+ {:operation :select
+  :connection con
+  :replacement-values [{:type :string :value "space_id"}]
+  :field-list [{:field-name "count(action)" :field-alias "count"}
+               {:field-name "action"}
+               {:field-name "activity_id"}
+               {:field-name "registered"}]
+  :from {:table-alias "derived_1"
+         :sub-select {:distinct true
+                      :field-list [{:field-name "context_user_id"}
+                                   {:field-name "action"}
+                                   {:field-name "activity_id"}
+                                   {:field-name "case when context_user_id > 0 then 1 else 0 end" :field-alias "registered"}]
+                      :from "participation_log"
+                      :where [{:and [{:left "space_id"
+                                      :comparison "="
+                                      :right "?"}
+                                     {:left "status"
+                                      :comparison "="
+                                      :right "1"}
+                                     {:left "action"
+                                      :comparison "between"
+                                      :right "11 and 17"}]}]}}
+  :group-by [{:field-name "action"}
+             {:field-name "activity_id"}
+             {:field-name "registered"}]})
 
 
 
@@ -1222,109 +1527,4 @@
                          {:field-name "field3" :field-alias "field3" :table-alias "t1"}]
                         [{:table-name "table2" :table-alias "t1"}]
                         [{:left "t1.field4" :comparison "=" :right "'Manager'"}])
-
-(def rx-word-boundary "\\b")
-(def rx-any-character ".")
-(def rx-zero-or-one "?")
-(def rx-zero-or-many "*")
-(def rx-one-or-many "+")
-(def rx-digit-character "\\d")
-(def rx-not-digit-character "\\D")
-(def rx-word-character "\\w")
-(def rx-not-word-character "\\W")
-(def rx-whitespace-character "\\s")
-(def rx-not-whitespace-character "\\S")
-(def rx-string-beginning "^")
-(def rx-string-ending "$")
-(def rx-line-feed-character "\\n")
-(def rx-carriage-return-character "\\r")
-(def rx-tab-character "\\t")
-(def rx-lazy-character "?")
-(def rx-group-open "(")
-(def rx-group-close ")")
-(def rx-curly-open "{")
-(def rx-curly-close "}")
-(def rx-square-open "[")
-(def rx-square-close "]")
-
-(defn rx-exactly-n-of [n thing]
-  (let [args [thing rx-curly-open n rx-curly-close]]
-    (clojure.string/join "" args)))
-
-(defn rx-between-n-and-m-of [n m thing]
-  (let [args [thing rx-curly-open n "," m rx-curly-close]]
-    (clojure.string/join "" args)))
-
-(defn rx-at-least-n-of [n thing]
-  (let [args [thing rx-curly-open n "," rx-curly-close]]
-    (clojure.string/join "" args)))
-
-(defn rx-zero-to-n-of [n thing]
-  (let [args [thing rx-curly-open "," n rx-curly-close]]
-    (clojure.string/join "" args)))
-
-(defn rx-zero-to-one-of [thing]
-  (let [args [thing rx-zero-or-one]]
-    (clojure.string/join "" args)))
-
-(defn rx-zero-to-many-of [thing]
-  (let [args [thing rx-zero-or-many]]
-    (clojure.string/join "" args)))
-
-(defn rx-one-to-many-of [thing]
-  (let [args [thing rx-one-or-many]]
-    (clojure.string/join "" args)))
-
-(defn rx-lazy [thing]
-  (let [args [thing rx-lazy-character]]
-    (clojure.string/join "" args)))
-
-(defn rx-lazy-exactly-n-of [n thing]
-  (rx-lazy (rx-exactly-n-of n thing)))
-
-(defn rx-lazy-between-n-and-m-of [n m thing]
-  (rx-lazy (rx-between-n-and-m-of n m thing)))
-
-(defn rx-lazy-at-least-n-of [n thing]
-  (rx-lazy (rx-at-least-n-of n thing)))
-
-(defn rx-lazy-zero-to-n-of [n thing]
-  (rx-lazy (rx-zero-to-n-of n thing)))
-
-(defn rx-lazy-zero-to-one-of [thing]
-  (rx-lazy (rx-zero-to-one-of thing)))
-
-(defn rx-lazy-zero-to-many-of [thing]
-  (rx-lazy (rx-zero-to-many-of thing)))
-
-(defn rx-lazy-one-to-many-of [thing]
-  (rx-lazy (rx-one-to-many-of thing)))
-
-(defn rx-combine [things]
-  (clojure.string/join "" things))
-
-(defn rx-capture-group [things]
-  (let [args [rx-group-open things rx-group-close]]
-    (clojure.string/join "" args)))
-
-(defn rx-non-capture-group [things]
-  (let [args [rx-group-open "?:" things rx-group-close]]
-    (clojure.string/join "" args)))
-
-(defn rx-these-characters [things]
-  (clojure.string/replace things "([[\\^$.|?*+(){}\\]])" (str (cat ["\\" "(\\1)"]))))
-
-(defn rx-one-of-these [options]
-  (let [options-text (clojure.string/join "|" options)
-        args [rx-group-open options-text rx-group-open]]
-    (clojure.string/join "" args)))
-
-(defn rx-character-set [characters]
-  (let [args [rx-square-open characters rx-square-close]]
-    (clojure.string/join "" args)))
-
-(defn rx-anti-character-set [characters]
-  (let [args [rx-square-open characters rx-square-close]]
-    (clojure.string/join "" args)))
-
 
