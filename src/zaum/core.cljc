@@ -888,6 +888,37 @@
                       (fn [i] (.getObject rs i))
                       (range 1 (+ 1 (.getColumnCount rsmd)))))))))
 
+(defn take-maps [amount ^java.sql.ResultSet rs]
+  (let [rsmd (get-result-set-meta-data rs)]
+    (cond
+        (= amount :all)
+        (seq (get-results-maps rs rsmd))
+        (= amount :rest)
+        (seq (get-results-maps rs rsmd))
+        (int? amount)
+        (seq (for [x (range amount)
+                   :while (.next rs)]
+               (into {} (mapv (fn [i] {(keyword (clojure.string/replace (.getColumnLabel rsmd i) " " "-")) (.getObject rs i)}) (range 1 (+ 1 (.getColumnCount rsmd)))))))
+        :else
+        (seq (for [x [1]
+                   :while (.next rs)]
+               (into {} (mapv (fn [i] {(keyword (clojure.string/replace (.getColumnLabel rsmd i) " " "-")) (.getObject rs i)}) (range 1 (+ 1 (.getColumnCount rsmd))))))))))
+
+(defn take-vectors [amount ^java.sql.ResultSet rs]
+  (let [rsmd (get-result-set-meta-data rs)]
+    (cond
+      (= amount :all)
+      (seq (get-results-vectors rs rsmd))
+      (= amount :rest)
+      (seq (get-results-vectors rs rsmd))
+      (int? amount)
+      (seq (for [x (range amount)
+                 :while (.next rs)]
+             (mapv (fn [i] (.getObject rs i)) (range 1 (+ 1 (.getColumnCount rsmd))))))
+      :else
+      (seq (for [x [1]
+                 :while (.next rs)]
+             (mapv (fn [i] (.getObject rs i)) (range 1 (+ 1 (.getColumnCount rsmd)))))))))
 
 #_(def con (get-connection {:connection-info {:dbtype "mysql"
                                                  :dbname "your-db-name?zeroDateTimeBehavior=convertToNull&useUnicode=true&characterEncoding=UTF-8"
