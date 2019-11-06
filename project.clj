@@ -1,4 +1,4 @@
-(defproject org.zaumdb/zaum "0.1.0-SNAPSHOT"
+(defproject org.zaumdb/zaum "0.2.9"
   :description "FIXME: write description"
   :url "https://github.com/dkropfuntucht/zaum"
   :license {:name "Eclipse Public License"
